@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Visualizador do Carteiro Chinês - Frontend</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e24;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            display: flex;
+            flex-direction: row;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        canvas {
+            background-color: #2b2b36;
+            border-radius: 10px;
+            box-shadow: 0px 4px 15px rgba(0,0,0,0.5);
+            margin-top: 10px;
+        }
+        #fakeConsole {
+            background-color: #121212;
+            color: #4CAF50;
+            font-family: 'Consolas', monospace;
+            padding: 15px;
+            width: 370px;
+            height: 500px;
+            overflow-y: auto;
+            border-radius: 10px;
+            border: 2px solid #333;
+            box-sizing: border-box;
+            box-shadow: inset 0px 0px 15px rgba(0,0,0,1);
+            margin-top: 10px;
+            line-height: 1.5;
+        }
+        .blink { animation: blinker 1s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+        
+        #controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            background-color: #2b2b36;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.3);
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            background-color: #3498db;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.3s;
+        }
+        .file-label:hover { background-color: #2980b9; transform: scale(1.05); }
+
+        button {
+            background-color: #e67e22;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: 0.3s;
+            font-weight: bold;
+        }
+        button:hover { background-color: #d35400; transform: scale(1.05); }
+        button:disabled { background-color: #555; cursor: not-allowed; transform: none; }
+        
+        h1, h3 { margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Frontend: O Problema do Carteiro Chinês</h1>
+    <h3 id="status">Faça upload de um arquivo de Grafo (.txt) para processar...</h3>
+    
+    <div id="controls">
+        <label class="file-label">
+            📁 Carregar Grafo (.txt)
+            <input type="file" id="fileInput" accept=".txt">
+        </label>
+        <span id="fileName">Nenhum arquivo selecionado</span>
+        <button id="btnStart" onclick="startAnimation()" disabled>Visualizar Circuito ▶</button>
+    </div>
+
+    <div class="container">
+        <canvas id="graphCanvas" width="700" height="500"></canvas>
+        <div id="fakeConsole">Console Log:<br/>> Aguardando arquivo...<br/><span class='blink'>_</span></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('graphCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status');
+        const fileInput = document.getElementById('fileInput');
+        const fileNameSpan = document.getElementById('fileName');
+        const btnStart = document.getElementById('btnStart');
+
+        let nodes = {};
+        let cycle = [];
+        let allEdges = [];
+        let totalGraphInitialCost = 0;
+
+        let currentStep = 0;
+        let animatedEdges = [];
+        let totalCostRun = 0;
+        let isAnimating = false;
+        let animationProgress = 0.0;
+        const animationSpeed = 0.03; // mais suave
+
+        function printLog(message, isError = false) {
+            let cBox = document.getElementById('fakeConsole');
+            cBox.innerHTML = cBox.innerHTML.replace('<span class="blink">_</span>', '');
+            if(isError) {
+                cBox.innerHTML += "> <span style='color:#e74c3c'>" + message + "</span><br/>";
+            } else {
+                cBox.innerHTML += "> " + message + "<br/>";
+            }
+            cBox.innerHTML += "<span class='blink'>_</span>";
+            cBox.scrollTop = cBox.scrollHeight;
+        }
+
+        // Parseador do Arquivo TXT + Emulação de Python
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            fileNameSpan.innerText = file.name;
+            btnStart.disabled = true;
+            isAnimating = false;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                printLog(`---------------------------`);
+                printLog(`Lendo '${file.name}'...`);
+                let lines = e.target.result.split(/\r?\n/).filter(l => l.trim() !== "");
+                
+                if (lines.length < 2) {
+                    printLog("Arquivo inválido", true);
+                    return;
+                }
+
+                let V = parseInt(lines[0]);
+                let E = parseInt(lines[1]);
+                
+                allEdges = [];
+                nodes = {};
+                totalGraphInitialCost = 0;
+
+                let indegree = Array(V).fill(0);
+                let outdegree = Array(V).fill(0);
+                let adjList = Array.from({length: V}, () => []);
+
+                for (let i = 2; i < 2 + E; i++) {
+                    if (i >= lines.length) break;
+                    let parts = lines[i].split(/\s+/);
+                    if(parts.length >= 3) {
+                        let from = parseInt(parts[0]);
+                        let to = parseInt(parts[1]);
+                        let weight = parseFloat(parts[2]);
+                        
+                        allEdges.push({from, to, weight});
+                        outdegree[from]++;
+                        indegree[to]++;
+                        adjList[from].push({to, weight});
+                        totalGraphInitialCost += weight;
+                    }
+                }
+
+                // Cálculo Dinâmico de posições dos vértices (Círculo Poligonal)
+                const centerX = 350;
+                const centerY = 250;
+                const radius = 200;
+                for (let v = 0; v < V; v++) {
+                    let angle = v * (2 * Math.PI) / V - (Math.PI / 2);
+                    nodes[v] = {
+                        id: String.fromCharCode(v + 97), // 0=a, 1=b...
+                        x: centerX + radius * Math.cos(angle),
+                        y: centerY + radius * Math.sin(angle),
+                        glow: 0
+                    };
+                }
+
+                printLog(`Grafo montado: ${V} Vértices, ${E} Arestas.`);
+                
+                // Validação de Eulerização
+                let isBalanced = true;
+                for (let i = 0; i < V; i++) {
+                    if (indegree[i] !== outdegree[i]) {
+                        isBalanced = false;
+                        printLog(`Desbalanço detectado no vértice ${String.fromCharCode(i + 97)} (In:${indegree[i]} Out:${outdegree[i]})`, true);
+                    }
+                }
+
+                if (!isBalanced) {
+                    printLog("O grafo NÃO está balanceado.", true);
+                    printLog("Tratando como grafo não-euleriano. Animação inviável.", true);
+                    statusText.innerText = "Erro: O arquivo não contém um grafo euleriano balanceado.";
+                    initialRender();
+                    return;
+                }
+
+                printLog("Grafo 100% balanceado. Algoritmo Hierholzer liberado!");
+
+                // Execução do Algoritmo de Hierholzer via Javascript
+                let path = [];
+                cycle = [];
+                let start_vertex = 0;
+                for(let i=0; i<V; i++){
+                    if(outdegree[i] > 0) { start_vertex = i; break; }
+                }
+
+                path.push(start_vertex);
+                while(path.length > 0) {
+                    let v = path[path.length - 1];
+                    if(adjList[v].length > 0) {
+                        let edge = adjList[v].pop(); 
+                        path.push(edge.to);
+                    } else {
+                        cycle.push(path.pop());
+                    }
+                }
+                cycle.reverse();
+
+                let finalSeq = cycle.map(x => String.fromCharCode(x + 97)).join(" ");
+                printLog(`Ciclo Gerado com Sucesso!`);
+                statusText.innerText = "Trâmite finalizado. Clique em INICIAR ANIMAÇÃO.";
+                btnStart.disabled = false;
+
+                initialRender();
+            };
+            
+            reader.readAsText(file);
+        });
+
+        // ================= FUNÇÕES DO CANVAS E ANIMAÇÃO ================== //
+
+        function drawNode(node) {
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, 25, 0, 2 * Math.PI);
+            
+            if (node.glow > 0) {
+                ctx.shadowColor = '#00ffaa';
+                ctx.shadowBlur = node.glow;
+                node.glow -= 1;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            ctx.fillStyle = (node.id === 'a') ? "#2c3e50" : "#3498db";
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = (node.id === 'a') ? "#f1c40f" : "#fff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 20px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(node.id, node.x, node.y);
+            
+            if (node.id === 'a') {
+                ctx.fillStyle = "#f1c40f";
+                ctx.font = "bold 12px Arial";
+                ctx.fillText("START", node.x, node.y - 40);
+            }
+        }
+
+        function drawArrow(fromX, fromY, toX, toY, color="#7f8c8d", width=2, text="", progress=1.0) {
+            const headlen = 15; 
+            const dx = toX - fromX;
+            const dy = toY - fromY;
+            const angle = Math.atan2(dy, dx);
+            
+            const startX = fromX + 25 * Math.cos(angle);
+            const startY = fromY + 25 * Math.sin(angle);
+            const fullTargetX = toX - 25 * Math.cos(angle);
+            const fullTargetY = toY - 25 * Math.sin(angle);
+
+            const targetX = startX + (fullTargetX - startX) * progress;
+            const targetY = startY + (fullTargetY - startY) * progress;
+
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(targetX, targetY);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.lineCap = "round";
+            ctx.stroke();
+
+            if (progress > 0.1) {
+                ctx.beginPath();
+                ctx.moveTo(targetX, targetY);
+                ctx.lineTo(targetX - headlen * Math.cos(angle - Math.PI / 6), targetY - headlen * Math.sin(angle - Math.PI / 6));
+                ctx.lineTo(targetX - headlen * Math.cos(angle + Math.PI / 6), targetY - headlen * Math.sin(angle + Math.PI / 6));
+                ctx.lineTo(targetX, targetY);
+                ctx.fillStyle = color;
+                ctx.fill();
+            }
+            
+            if (text !== "") {
+                const midX = (startX + fullTargetX) / 2;
+                const midY = (startY + fullTargetY) / 2 - 10;
+                ctx.fillStyle = "#f1c40f";
+                ctx.font = "bold 14px Arial";
+                ctx.fillText(text, midX, midY);
+            }
+        }
+
+        function gameLoop() {
+            if (!isAnimating) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            allEdges.forEach(e => {
+                const start = nodes[e.from];
+                const end = nodes[e.to];
+                drawArrow(start.x, start.y, end.x, end.y, "rgba(127, 140, 141, 0.2)", 2, e.weight);
+            });
+
+            // Tracking dynamic occurrences of edges to offset lines correctly
+            let drawnLines = {}; 
+            animatedEdges.forEach((e, idx) => {
+                const start = nodes[e.from];
+                const end = nodes[e.to];
+                const key = e.from + "-" + e.to;
+                if(!drawnLines[key]) drawnLines[key] = 0;
+
+                const offset = drawnLines[key] * 8; 
+                drawArrow(start.x, start.y + offset, end.x, end.y + offset, "#e74c3c", 4, (idx+1).toString() + "º");
+                drawnLines[key] += 1;
+            });
+
+            if (currentStep < cycle.length - 1) {
+                const fromNodeId = cycle[currentStep];
+                const toNodeId = cycle[currentStep + 1];
+                const startPoint = nodes[fromNodeId];
+                const endPoint = nodes[toNodeId];
+
+                const key = fromNodeId + "-" + toNodeId;
+                const offset = (drawnLines[key] || 0) * 8;
+
+                drawArrow(startPoint.x, startPoint.y + offset, endPoint.x, endPoint.y + offset, "#f39c12", 4, "", animationProgress);
+
+                animationProgress += animationSpeed;
+
+                if (animationProgress >= 1.0) {
+                    animationProgress = 0.0;
+                    animatedEdges.push({from: fromNodeId, to: toNodeId});
+                    nodes[toNodeId].glow = 25;
+
+                    let edgeWeight = 0;
+                    const possibleEdges = allEdges.filter(e => e.from === fromNodeId && e.to === toNodeId);
+                    if(possibleEdges.length > 0) {
+                        edgeWeight = possibleEdges[0].weight;
+                    }
+                    totalCostRun += edgeWeight;
+
+                    printLog(`<span style="color:#00ffaa">📍 Chegou:</span> ${nodes[fromNodeId].id} ➔ ${nodes[toNodeId].id} <span style="color:#666">| Caixa: ${totalCostRun.toFixed(0)}</span>`);
+                    statusText.innerText = `Robô localizado no vértice: ${nodes[toNodeId].id.toUpperCase()}`;
+                    currentStep++;
+                }
+            } else {
+                isAnimating = false;
+                statusText.innerText = `🎯 Circuito Completado (Custo Global: ${totalCostRun.toFixed(0)})`;
+                
+                let finalSeq = cycle.map(x => String.fromCharCode(x + 97)).join(" ");
+                printLog(`<span style='color:#00ff00'>-----------------------------------<br/>> 🎉 CIRCUITO EULERIANO FINALIZADO!<br/>> ➜ Rota: ${finalSeq}<br/>> ➜ Custo Final: ${totalCostRun.toFixed(0)}</span>`);
+            }
+
+            // Sempre desenha nós
+            Object.values(nodes).forEach(n => drawNode(n));
+
+            if(isAnimating) requestAnimationFrame(gameLoop);
+        }
+
+        function startAnimation() {
+            if(!cycle || cycle.length <= 1) {
+                printLog("Grafo vazio ou quebrado. Operação abortada.", true);
+                return;
+            }
+            
+            currentStep = 0;
+            animatedEdges = [];
+            totalCostRun = 0;
+            animationProgress = 0.0;
+            Object.values(nodes).forEach(n => n.glow = 0);
+            
+            printLog("");
+            printLog("<span style='color:#f1c40f'>--- BOOTING HIERHOLZER SYSTEM ---</span>");
+            statusText.innerText = `Animando algoritmo...`;
+            
+            isAnimating = true;
+            btnStart.disabled = true; // previne múltiplos cliques
+            requestAnimationFrame(gameLoop);
+        }
+
+        function initialRender() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if(Object.keys(nodes).length > 0) {
+                allEdges.forEach(e => {
+                    const start = nodes[e.from];
+                    const end = nodes[e.to];
+                    drawArrow(start.x, start.y, end.x, end.y, "rgba(127, 140, 141, 0.4)", 2, e.weight);
+                });
+                Object.values(nodes).forEach(n => drawNode(n));
+            }
+        }
+        
+        initialRender();
+
+    </script>
+</body>
+</html>
