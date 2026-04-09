@@ -50,4 +50,4 @@ A saída exibirá o carregamento atestando o balanceamento de vértices (`Entrad
 
 ## Vídeo Explicação
 Aqui deve ser preenchido o link do vídeo de apresentação da modelagem e do código em pleno funcionamento:
-[LINK_DO_VIDEO_AQUI]
+[(https://youtu.be/a_zeOX2mIrg)]
